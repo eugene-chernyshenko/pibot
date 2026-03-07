@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PiBot WebChat</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 1rem;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+    }
+    header h1 {
+      font-size: 1.5rem;
+      color: #e94560;
+    }
+    .status {
+      font-size: 0.8rem;
+      color: #888;
+      margin-top: 0.25rem;
+    }
+    .status.connected {
+      color: #4ade80;
+    }
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .message {
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      max-width: 80%;
+      word-wrap: break-word;
+    }
+    .message.user {
+      background: #0f3460;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .message.assistant {
+      background: #16213e;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .message.system {
+      background: #2a2a4a;
+      align-self: center;
+      font-size: 0.85rem;
+      color: #888;
+    }
+    .message.error {
+      background: #5a1a1a;
+      align-self: center;
+      color: #f88;
+    }
+    .input-area {
+      padding: 1rem;
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+    }
+    .input-form {
+      display: flex;
+      gap: 0.5rem;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      background: #1a1a2e;
+      color: #eee;
+      font-size: 1rem;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #e94560;
+    }
+    button {
+      padding: 0.75rem 1.5rem;
+      background: #e94560;
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #c73a54;
+    }
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🤖 PiBot WebChat</h1>
+      <div class="status" id="status">Connecting...</div>
+    </header>
+    <div class="messages" id="messages"></div>
+    <div class="input-area">
+      <form class="input-form" id="input-form">
+        <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
+        <button type="submit" id="send-btn" disabled>Send</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const WS_URL = 'ws://localhost:3000/ws';
+
+    const messagesEl = document.getElementById('messages');
+    const statusEl = document.getElementById('status');
+    const inputForm = document.getElementById('input-form');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    let ws = null;
+    let userId = null;
+    let currentStreamMessage = null;
+
+    function connect() {
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        statusEl.textContent = 'Connected';
+        statusEl.className = 'status connected';
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+        messageInput.focus();
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = 'Disconnected. Reconnecting...';
+        statusEl.className = 'status';
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        addMessage('Connection error', 'error');
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleMessage(data);
+      };
+    }
+
+    function handleMessage(data) {
+      switch (data.type) {
+        case 'connected':
+          userId = data.userId;
+          addMessage(`Connected as ${userId}`, 'system');
+          break;
+
+        case 'message':
+          addMessage(data.content, 'assistant');
+          break;
+
+        case 'stream':
+          handleStream(data);
+          break;
+
+        case 'pong':
+          // Ignore keepalive
+          break;
+
+        case 'error':
+          addMessage(`Error: ${data.error}`, 'error');
+          break;
+
+        default:
+          console.log('Unknown message type:', data);
+      }
+    }
+
+    function handleStream(data) {
+      if (data.streamType === 'start') {
+        currentStreamMessage = document.createElement('div');
+        currentStreamMessage.className = 'message assistant';
+        currentStreamMessage.textContent = '';
+        messagesEl.appendChild(currentStreamMessage);
+        scrollToBottom();
+      } else if (data.streamType === 'chunk' && currentStreamMessage) {
+        currentStreamMessage.textContent += data.content || '';
+        scrollToBottom();
+      } else if (data.streamType === 'end') {
+        currentStreamMessage = null;
+      } else if (data.streamType === 'error') {
+        if (currentStreamMessage) {
+          currentStreamMessage.className = 'message error';
+          currentStreamMessage.textContent = `Error: ${data.error}`;
+        }
+        currentStreamMessage = null;
+      }
+    }
+
+    function addMessage(content, type) {
+      const messageEl = document.createElement('div');
+      messageEl.className = `message ${type}`;
+      messageEl.textContent = content;
+      messagesEl.appendChild(messageEl);
+      scrollToBottom();
+    }
+
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function sendMessage(content) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addMessage('Not connected', 'error');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'message',
+        content: content
+      }));
+
+      addMessage(content, 'user');
+    }
+
+    inputForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const content = messageInput.value.trim();
+      if (content) {
+        sendMessage(content);
+        messageInput.value = '';
+      }
+    });
+
+    // Keepalive ping every 30 seconds
+    setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30000);
+
+    // Initial connection
+    connect();
+  </script>
+</body>
+</html>
