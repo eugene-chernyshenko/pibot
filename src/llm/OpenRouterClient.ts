@@ -15,7 +15,7 @@ const logger = createLogger('OpenRouterClient');
 
 interface OpenRouterMessage {
   role: string;
-  content: string | Array<{ type: string; text?: string; tool_call_id?: string }>;
+  content: string | null | Array<{ type: string; text?: string; tool_call_id?: string }>;
   tool_calls?: Array<{
     id: string;
     type: 'function';
@@ -76,11 +76,15 @@ export class OpenRouterClient {
 
       const result: OpenRouterMessage = {
         role: msg.role,
-        content: textParts.join('\n'),
+        content: textParts.length > 0 ? textParts.join('\n') : null,
       };
 
       if (toolCalls.length > 0) {
         result.tool_calls = toolCalls;
+        // For assistant messages with only tool calls, content can be null
+        if (textParts.length === 0) {
+          result.content = null;
+        }
       }
 
       return result;

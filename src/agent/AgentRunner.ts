@@ -28,6 +28,11 @@ export class AgentRunner {
 
   setTools(tools: Tool[]): void {
     this.tools = tools;
+    logger.debug({ count: tools.length }, 'Tools updated');
+  }
+
+  getToolCount(): number {
+    return this.tools.length;
   }
 
   async processMessage(session: Session, userMessage: string): Promise<string> {
@@ -80,17 +85,34 @@ export class AgentRunner {
           tools: this.tools.length > 0 ? this.tools : undefined,
         });
 
-        // Handle text response
-        if (response.content) {
-          yield { type: 'content', content: response.content };
-
-          // Add assistant message to history
-          messages.push({ role: 'assistant', content: response.content });
-          session.messages.push({ role: 'assistant', content: response.content });
-        }
-
         // Handle tool calls
         if (response.toolCalls.length > 0 && this.toolExecutor) {
+          // Build assistant message with tool calls
+          const assistantContent: Array<{ type: string; text?: string; id?: string; name?: string; arguments?: string }> = [];
+
+          // Add text content if present
+          if (response.content) {
+            assistantContent.push({ type: 'text', text: response.content });
+            yield { type: 'content', content: response.content };
+          }
+
+          // Add tool calls to assistant message
+          for (const toolCall of response.toolCalls) {
+            assistantContent.push({
+              type: 'tool_call',
+              id: toolCall.id,
+              name: toolCall.function.name,
+              arguments: toolCall.function.arguments,
+            });
+          }
+
+          // Add assistant message with tool calls
+          messages.push({
+            role: 'assistant',
+            content: assistantContent as Message['content'],
+          });
+
+          // Execute each tool and add results
           for (const toolCall of response.toolCalls) {
             yield {
               type: 'tool_call',
@@ -113,7 +135,7 @@ export class AgentRunner {
               },
             };
 
-            // Add tool result to messages
+            // Add tool result message
             messages.push({
               role: 'tool',
               content: [
@@ -129,6 +151,15 @@ export class AgentRunner {
 
           // Continue loop to get LLM response after tool execution
           continue;
+        }
+
+        // Handle text-only response (no tool calls)
+        if (response.content) {
+          yield { type: 'content', content: response.content };
+
+          // Add assistant message to history
+          messages.push({ role: 'assistant', content: response.content });
+          session.messages.push({ role: 'assistant', content: response.content });
         }
 
         // No more tool calls, we're done

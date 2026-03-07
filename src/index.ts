@@ -4,9 +4,13 @@ import { TelegramChannel } from './channels/TelegramChannel.js';
 import { WebChatChannel } from './channels/WebChatChannel.js';
 import { AgentRunner } from './agent/AgentRunner.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
+import { SkillLoader } from './skills/SkillLoader.js';
 import { MemoryManager } from './memory/MemoryManager.js';
 import { DateTimeSkill } from './skills/builtin/DateTime.js';
 import { MemorySkill } from './skills/builtin/Memory.js';
+import { FileSystemSkill } from './skills/builtin/FileSystem.js';
+import { SkillGeneratorSkill } from './skills/builtin/SkillGenerator.js';
+import { SkillManagerSkill } from './skills/builtin/SkillManager.js';
 import type { IncomingMessage } from './channels/types.js';
 import type { Session } from './gateway/SessionManager.js';
 
@@ -16,12 +20,14 @@ class PiBot {
   private gateway: Gateway;
   private agentRunner: AgentRunner;
   private skillRegistry: SkillRegistry;
+  private skillLoader: SkillLoader;
   private memoryManager: MemoryManager;
 
   constructor() {
     this.gateway = new Gateway();
     this.agentRunner = new AgentRunner();
     this.skillRegistry = new SkillRegistry();
+    this.skillLoader = new SkillLoader(this.skillRegistry);
     this.memoryManager = new MemoryManager();
   }
 
@@ -35,10 +41,25 @@ class PiBot {
     // Register built-in skills
     this.skillRegistry.register(new DateTimeSkill());
     this.skillRegistry.register(new MemorySkill());
+    this.skillRegistry.register(new FileSystemSkill());
+    this.skillRegistry.register(new SkillGeneratorSkill());
+    this.skillRegistry.register(new SkillManagerSkill(this.skillRegistry, this.skillLoader));
 
-    // Configure agent
+    // Load custom skills from skills/ directory
+    const loadedCount = await this.skillLoader.loadAll();
+    if (loadedCount > 0) {
+      logger.info({ count: loadedCount }, 'Loaded custom skills');
+    }
+
+    // Start watching for new skills (hot-reload)
+    this.skillLoader.startWatching(5000);
+
+    // Configure agent with callback to refresh tools when skills change
     this.agentRunner.setToolExecutor(this.skillRegistry);
     this.agentRunner.setTools(this.skillRegistry.getAllTools());
+
+    // Listen for skill registry changes to update agent tools
+    this.setupSkillChangeListener();
 
     // Register channels
     this.gateway.registerChannel(new TelegramChannel());
@@ -59,9 +80,23 @@ class PiBot {
 
   async stop(): Promise<void> {
     logger.info('Stopping PiBot...');
+    this.skillLoader.stopWatching();
     await this.memoryManager.logSystem('PiBot shutting down');
     await this.gateway.stop();
     logger.info('PiBot stopped');
+  }
+
+  private setupSkillChangeListener(): void {
+    // Refresh agent tools periodically to pick up newly loaded skills
+    setInterval(() => {
+      const currentTools = this.agentRunner.getToolCount?.() ?? 0;
+      const registryTools = this.skillRegistry.getAllTools().length;
+
+      if (currentTools !== registryTools) {
+        this.agentRunner.setTools(this.skillRegistry.getAllTools());
+        logger.info({ tools: registryTools }, 'Agent tools updated');
+      }
+    }, 5000);
   }
 
   private async processMessage(

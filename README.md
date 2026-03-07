@@ -7,8 +7,10 @@ A modular AI assistant built with Node.js, featuring Telegram and WebChat interf
 - **Multiple Channels**: Telegram bot and WebSocket-based WebChat
 - **OpenRouter Integration**: Access to 41+ LLM models through unified API
 - **Skills System**: Extensible tool/plugin architecture
+- **Self-Coding**: Bot can write and load its own skills at runtime
 - **Memory System**: Persistent memory with daily logs and knowledge base
 - **Session Management**: Per-user conversation history
+- **Hot-Reload**: New skills are automatically loaded without restart
 - **Streaming Support**: Real-time response streaming
 
 ## Architecture
@@ -40,8 +42,18 @@ A modular AI assistant built with Node.js, featuring Telegram and WebChat interf
 │      MEMORY      │    │      SKILLS      │
 │  • Sessions      │    │  • DateTime      │
 │  • Daily Logs    │    │  • Memory        │
-│  • Knowledge Base│    │  • (Custom)      │
-└──────────────────┘    └──────────────────┘
+│  • Knowledge Base│    │  • FileSystem    │
+└──────────────────┘    │  • SkillGen      │
+                        │  • SkillManager  │
+                        │  • (Custom)      │
+                        └──────────────────┘
+                                 │
+                                 ▼
+                        ┌──────────────────┐
+                        │   SKILL LOADER   │
+                        │  • Hot-reload    │
+                        │  • skills/*.ts   │
+                        └──────────────────┘
 ```
 
 ## Quick Start
@@ -146,6 +158,61 @@ ws.onmessage = (event) => {
 - `memory_list` - List memory keys
 - `memory_search` - Search memories
 
+### FileSystem (Self-Coding)
+- `fs_read` - Read files from skills/ or data/ directories
+- `fs_write` - Write files to allowed directories
+- `fs_list` - List directory contents
+- `fs_delete` - Delete files (with safety restrictions)
+- `fs_exists` - Check if file/directory exists
+
+### SkillGenerator (Self-Coding)
+- `generate_skill` - Generate skill code from a definition
+- `get_skill_template` - Get an example skill definition
+- `validate_skill_code` - Validate skill code structure
+
+### SkillManager (Self-Coding)
+- `list_skills` - List all registered skills and tools
+- `load_skill` - Load a skill from skills/ directory
+- `unload_skill` - Unload a skill by name
+- `reload_skill` - Reload a skill from file
+- `reload_all_skills` - Reload all skills
+- `get_skill_info` - Get detailed skill information
+
+## Self-Coding Feature
+
+PiBot can write and load its own skills at runtime! Here's how it works:
+
+### Example Conversation
+
+```
+User: "Create a skill that converts temperatures between Celsius and Fahrenheit"
+
+Bot: I'll create a temperature converter skill for you.
+     *uses generate_skill to create the code*
+     *uses fs_write to save it to skills/TemperatureSkill.ts*
+     *uses load_skill to activate it*
+     Done! You can now use the temperature converter.
+
+User: "Convert 100°F to Celsius"
+
+Bot: *uses convert_temperature tool*
+     100°F = 37.78°C
+```
+
+### How It Works
+
+1. **Generate**: Bot uses `generate_skill` to create TypeScript code from a definition
+2. **Save**: Bot uses `fs_write` to save the code to `skills/YourSkill.ts`
+3. **Load**: Bot uses `load_skill` to dynamically import and register the skill
+4. **Use**: The new tools are immediately available to the bot
+
+### Security
+
+- File operations are restricted to `skills/` and `data/` directories only
+- Path traversal attacks are blocked
+- Core skills cannot be unloaded
+- Code is validated before loading
+
 ## Creating Custom Skills
 
 ```typescript
@@ -196,13 +263,24 @@ pibot/
 │   ├── agent/             # ReAct loop & LLM interaction
 │   ├── llm/               # OpenRouter client
 │   ├── memory/            # Persistence layer
-│   ├── skills/            # Tool/plugin system
+│   ├── skills/
+│   │   ├── BaseSkill.ts   # Skill base class
+│   │   ├── SkillRegistry.ts
+│   │   ├── SkillLoader.ts # Hot-reload support
+│   │   └── builtin/       # Built-in skills
+│   │       ├── DateTime.ts
+│   │       ├── Memory.ts
+│   │       ├── FileSystem.ts
+│   │       ├── SkillGenerator.ts
+│   │       └── SkillManager.ts
 │   └── utils/             # Utilities
 ├── data/                  # Runtime data
 │   ├── memory/            # Long-term memory
 │   ├── sessions/          # Session data
 │   └── logs/              # Daily logs
-└── skills/                # Custom skills
+├── skills/                # Custom skills (hot-reloaded)
+│   └── *.ts               # Your generated skills go here
+└── webchat-client.html    # Test WebChat client
 ```
 
 ## Testing
