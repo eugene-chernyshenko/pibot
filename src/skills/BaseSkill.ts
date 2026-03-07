@@ -20,8 +20,9 @@ export abstract class BaseSkill {
 
   abstract execute(toolName: string, args: unknown): Promise<ToolResult>;
 
-  protected success(result: string): ToolResult {
-    return { result, isError: false };
+  protected success(result: string | object): ToolResult {
+    const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+    return { result: resultStr, isError: false };
   }
 
   protected error(message: string): ToolResult {

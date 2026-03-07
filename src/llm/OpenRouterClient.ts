@@ -66,9 +66,13 @@ export class OpenRouterClient {
             function: { name: part.name, arguments: part.arguments },
           });
         } else if (part.type === 'tool_result') {
+          // Ensure content is always a string for the API
+          const resultContent = typeof part.content === 'string'
+            ? part.content
+            : JSON.stringify(part.content);
           return {
             role: 'tool',
-            content: part.content,
+            content: resultContent,
             tool_call_id: part.toolCallId,
           };
         }
@@ -105,9 +109,11 @@ export class OpenRouterClient {
   async chat(options: LLMRequestOptions): Promise<LLMResponse> {
     const { messages, tools, maxTokens, temperature } = options;
 
+    const convertedMessages = this.convertMessages(messages);
+
     const body: Record<string, unknown> = {
       model: this.defaultModel,
-      messages: this.convertMessages(messages),
+      messages: convertedMessages,
       max_tokens: maxTokens ?? this.defaultMaxTokens,
       stream: false,
     };
@@ -121,6 +127,7 @@ export class OpenRouterClient {
     }
 
     logger.debug({ model: this.defaultModel, messageCount: messages.length }, 'Sending chat request');
+    logger.debug({ messages: JSON.stringify(convertedMessages, null, 2) }, 'Request messages');
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
