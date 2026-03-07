@@ -1,46 +1,45 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { SkillGeneratorSkill } from '../src/skills/builtin/SkillGenerator.js';
-import { FileSystemSkill } from '../src/skills/builtin/FileSystem.js';
+import { mkdir, rm } from 'node:fs/promises';
+import { ToolGeneratorTool } from '../src/tools/builtin/ToolGenerator.js';
+import { FileSystemTool } from '../src/tools/builtin/FileSystem.js';
 
-const TEST_DIR = '/tmp/pibot-test-skills';
+const TEST_DIR = '/tmp/pibot-test-tools';
 
-describe('SkillGeneratorSkill', () => {
-  let skill: SkillGeneratorSkill;
+describe('ToolGeneratorTool', () => {
+  let tool: ToolGeneratorTool;
 
   beforeEach(() => {
-    skill = new SkillGeneratorSkill();
+    tool = new ToolGeneratorTool();
   });
 
-  it('should have required tools', () => {
-    const tools = skill.getTools();
-    const toolNames = tools.map(t => t.name);
+  it('should have required functions', () => {
+    const functions = tool.getTools();
+    const funcNames = functions.map(t => t.name);
 
-    expect(toolNames).toContain('generate_skill');
-    expect(toolNames).toContain('get_skill_template');
-    expect(toolNames).toContain('validate_skill_code');
+    expect(funcNames).toContain('generate_tool');
+    expect(funcNames).toContain('get_tool_template');
+    expect(funcNames).toContain('validate_tool_code');
   });
 
-  it('should generate a skill template example', async () => {
-    const result = await skill.execute('get_skill_template', {});
+  it('should generate a tool template example', async () => {
+    const result = await tool.execute('get_tool_template', {});
     expect(result.isError).toBe(false);
 
     const template = JSON.parse(result.result);
     expect(template.name).toBe('calculator');
-    expect(template.className).toBe('CalculatorSkill');
-    expect(template.tools).toHaveLength(2);
+    expect(template.className).toBe('CalculatorTool');
+    expect(template.functions).toHaveLength(2);
   });
 
-  it('should generate skill code from definition', async () => {
+  it('should generate tool code from definition', async () => {
     const definition = {
-      name: 'test_skill',
-      className: 'TestSkill',
-      description: 'A test skill',
-      tools: [
+      name: 'test_tool',
+      className: 'TestTool',
+      description: 'A test tool',
+      functions: [
         {
-          name: 'test_tool',
-          description: 'A test tool',
+          name: 'test_function',
+          description: 'A test function',
           parameters: [
             { name: 'input', type: 'string', description: 'Test input', required: true }
           ],
@@ -48,25 +47,25 @@ describe('SkillGeneratorSkill', () => {
       ]
     };
 
-    const result = await skill.execute('generate_skill', definition);
+    const result = await tool.execute('generate_tool', definition);
     expect(result.isError).toBe(false);
 
     const output = JSON.parse(result.result);
-    expect(output.filename).toBe('skills/TestSkill.ts');
-    expect(output.code).toContain('class TestSkill extends BaseSkill');
-    expect(output.code).toContain("readonly name = 'test_skill'");
-    expect(output.code).toContain('test_tool');
-    expect(output.code).toContain('export default TestSkill');
+    expect(output.filename).toBe('tools/TestTool.ts');
+    expect(output.code).toContain('class TestTool extends BaseTool');
+    expect(output.code).toContain("readonly name = 'test_tool'");
+    expect(output.code).toContain('test_function');
+    expect(output.code).toContain('export default TestTool');
   });
 
-  it('should validate correct skill code', async () => {
+  it('should validate correct tool code', async () => {
     const validCode = `
-import { BaseSkill, type ToolResult } from '../src/skills/BaseSkill.js';
+import { BaseTool, type ToolResult } from '../src/tools/BaseTool.js';
 import type { Tool } from '../src/llm/types.js';
 
-export class ValidSkill extends BaseSkill {
+export class ValidTool extends BaseTool {
   readonly name = 'valid';
-  readonly description = 'A valid skill';
+  readonly description = 'A valid tool';
 
   getTools(): Tool[] {
     return [];
@@ -77,54 +76,54 @@ export class ValidSkill extends BaseSkill {
   }
 }
 
-export default ValidSkill;
+export default ValidTool;
 `;
 
-    const result = await skill.execute('validate_skill_code', { code: validCode });
+    const result = await tool.execute('validate_tool_code', { code: validCode });
     expect(result.isError).toBe(false);
     expect(result.result).toContain('Validation passed');
   });
 
-  it('should reject invalid skill code', async () => {
+  it('should reject invalid tool code', async () => {
     const invalidCode = `
-export class InvalidSkill {
-  // Missing BaseSkill extension
+export class InvalidTool {
+  // Missing BaseTool extension
   // Missing required properties
 }
 `;
 
-    const result = await skill.execute('validate_skill_code', { code: invalidCode });
+    const result = await tool.execute('validate_tool_code', { code: invalidCode });
     expect(result.isError).toBe(true);
     expect(result.result).toContain('Missing');
   });
 
-  it('should reject definition without tools', async () => {
+  it('should reject definition without functions', async () => {
     const definition = {
       name: 'empty',
-      className: 'EmptySkill',
-      description: 'No tools',
-      tools: []
+      className: 'EmptyTool',
+      description: 'No functions',
+      functions: []
     };
 
-    const result = await skill.execute('generate_skill', definition);
+    const result = await tool.execute('generate_tool', definition);
     expect(result.isError).toBe(true);
-    expect(result.result).toContain('At least one tool');
+    expect(result.result).toContain('At least one function');
   });
 });
 
-describe('FileSystemSkill', () => {
-  let skill: FileSystemSkill;
+describe('FileSystemTool', () => {
+  let tool: FileSystemTool;
 
   beforeEach(async () => {
-    skill = new FileSystemSkill();
+    tool = new FileSystemTool();
     await mkdir(TEST_DIR, { recursive: true });
 
     // Temporarily patch cwd to allow test directory
     const originalCwd = process.cwd;
     process.cwd = () => TEST_DIR;
 
-    // Create a fresh skill instance with patched cwd
-    skill = new FileSystemSkill();
+    // Create a fresh tool instance with patched cwd
+    tool = new FileSystemTool();
 
     // Restore original
     process.cwd = originalCwd;
@@ -134,25 +133,25 @@ describe('FileSystemSkill', () => {
     await rm(TEST_DIR, { recursive: true, force: true });
   });
 
-  it('should have required tools', () => {
-    const tools = skill.getTools();
-    const toolNames = tools.map(t => t.name);
+  it('should have required functions', () => {
+    const functions = tool.getTools();
+    const funcNames = functions.map(t => t.name);
 
-    expect(toolNames).toContain('fs_read');
-    expect(toolNames).toContain('fs_write');
-    expect(toolNames).toContain('fs_list');
-    expect(toolNames).toContain('fs_delete');
-    expect(toolNames).toContain('fs_exists');
+    expect(funcNames).toContain('fs_read');
+    expect(funcNames).toContain('fs_write');
+    expect(funcNames).toContain('fs_list');
+    expect(funcNames).toContain('fs_delete');
+    expect(funcNames).toContain('fs_exists');
   });
 
   it('should deny access outside allowed directories', async () => {
-    const result = await skill.execute('fs_read', { path: '/etc/passwd' });
+    const result = await tool.execute('fs_read', { path: '/etc/passwd' });
     expect(result.isError).toBe(true);
     expect(result.result).toContain('Access denied');
   });
 
   it('should deny access to parent directories', async () => {
-    const result = await skill.execute('fs_read', { path: '../../../etc/passwd' });
+    const result = await tool.execute('fs_read', { path: '../../../etc/passwd' });
     expect(result.isError).toBe(true);
     expect(result.result).toContain('Access denied');
   });

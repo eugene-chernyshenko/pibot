@@ -1,10 +1,10 @@
-import { BaseSkill, type ToolResult } from '../BaseSkill.js';
+import { BaseTool, type ToolResult } from '../BaseTool.js';
 import type { Tool } from '../../llm/types.js';
 import { readFile, writeFile, readdir, mkdir, rm, stat } from 'node:fs/promises';
 import { join, resolve, relative, dirname } from 'node:path';
 import { config } from '../../config/index.js';
 
-export class FileSystemSkill extends BaseSkill {
+export class FileSystemTool extends BaseTool {
   readonly name = 'filesystem';
   readonly description = 'Safe file system operations within allowed directories';
 
@@ -12,9 +12,9 @@ export class FileSystemSkill extends BaseSkill {
 
   constructor() {
     super();
-    // Only allow access to skills directory and data directory
+    // Only allow access to tools directory and data directory
     this.allowedDirs = [
-      resolve(process.cwd(), 'skills'),
+      resolve(process.cwd(), 'tools'),
       resolve(config.memory.dataDir),
     ];
   }
@@ -23,13 +23,13 @@ export class FileSystemSkill extends BaseSkill {
     return [
       {
         name: 'fs_read',
-        description: 'Read a file from the skills or data directory',
+        description: 'Read a file from the tools or data directory',
         parameters: {
           type: 'object',
           properties: {
             path: {
               type: 'string',
-              description: 'Relative path to the file (e.g., "skills/MySkill.ts" or "data/notes.md")',
+              description: 'Relative path to the file (e.g., "tools/MyTool.ts" or "data/notes.md")',
             },
           },
           required: ['path'],
@@ -37,7 +37,7 @@ export class FileSystemSkill extends BaseSkill {
       },
       {
         name: 'fs_write',
-        description: 'Write content to a file in the skills or data directory',
+        description: 'Write content to a file in the tools or data directory',
         parameters: {
           type: 'object',
           properties: {
@@ -61,7 +61,7 @@ export class FileSystemSkill extends BaseSkill {
           properties: {
             path: {
               type: 'string',
-              description: 'Relative path to the directory (default: "skills")',
+              description: 'Relative path to the directory (default: "tools")',
             },
           },
         },
@@ -182,7 +182,7 @@ export class FileSystemSkill extends BaseSkill {
   }
 
   private async listDir(params: Record<string, unknown>): Promise<ToolResult> {
-    const path = (params['path'] as string) || 'skills';
+    const path = (params['path'] as string) || 'tools';
 
     const absolutePath = this.resolvePath(path);
     if (!absolutePath) {

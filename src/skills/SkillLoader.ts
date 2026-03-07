@@ -1,36 +1,40 @@
-import { readdir, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, resolve, basename } from 'node:path';
 import { createLogger } from '../utils/logger.js';
-import type { BaseSkill } from './BaseSkill.js';
-import type { SkillRegistry } from './SkillRegistry.js';
+import type { Skill } from './types.js';
 
 const logger = createLogger('SkillLoader');
 
-export class SkillLoader {
-  private skillsDir: string;
-  private loadedFiles: Set<string> = new Set();
-  private watchInterval: ReturnType<typeof setInterval> | null = null;
+interface SkillFrontmatter {
+  name?: string;
+  description?: string;
+  requiredTools?: string[];
+}
 
-  constructor(private registry: SkillRegistry, skillsDir: string = 'skills') {
-    this.skillsDir = resolve(process.cwd(), skillsDir);
+export class SkillLoader {
+  private promptsDir: string;
+  private skills: Map<string, Skill> = new Map();
+
+  constructor(promptsDir: string = 'prompts') {
+    this.promptsDir = resolve(process.cwd(), promptsDir);
   }
 
   async loadAll(): Promise<number> {
+    this.skills.clear();
     let loaded = 0;
 
     try {
-      const files = await readdir(this.skillsDir);
+      const files = await readdir(this.promptsDir);
 
       for (const file of files) {
-        if (file.endsWith('.ts') || file.endsWith('.js')) {
-          const success = await this.loadSkillFile(join(this.skillsDir, file));
+        if (file.endsWith('.md')) {
+          const success = await this.loadSkillFile(join(this.promptsDir, file));
           if (success) loaded++;
         }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.info({ dir: this.skillsDir }, 'Skills directory does not exist yet');
+        logger.info({ dir: this.promptsDir }, 'Prompts directory does not exist yet');
       } else {
         logger.error({ error }, 'Failed to load skills');
       }
@@ -39,111 +43,115 @@ export class SkillLoader {
     return loaded;
   }
 
-  async loadSkillFile(filePath: string): Promise<boolean> {
-    const absolutePath = resolve(filePath);
-
+  private async loadSkillFile(filePath: string): Promise<boolean> {
     try {
-      // Check if file exists
-      await stat(absolutePath);
+      const content = await readFile(filePath, 'utf-8');
+      const filename = basename(filePath, '.md');
 
-      // Use timestamp to bust cache
-      const fileUrl = pathToFileURL(absolutePath).href + `?t=${Date.now()}`;
+      // Parse frontmatter if present
+      const { frontmatter, body } = this.parseFrontmatter(content);
 
-      logger.debug({ path: absolutePath }, 'Loading skill file');
+      const skill: Skill = {
+        name: frontmatter.name || filename,
+        command: `/${filename}`,
+        description: frontmatter.description || this.extractDescription(body),
+        prompt: body.trim(),
+        requiredTools: frontmatter.requiredTools,
+      };
 
-      // Dynamic import
-      const module = await import(fileUrl);
+      this.skills.set(skill.command, skill);
+      logger.info({ skill: skill.name, command: skill.command }, 'Skill loaded');
 
-      // Get the default export or the first class that extends BaseSkill
-      const SkillClass = module.default || Object.values(module).find(
-        (exp: unknown) => typeof exp === 'function' && exp.prototype?.getTools
-      );
-
-      if (!SkillClass) {
-        logger.warn({ path: absolutePath }, 'No skill class found in file');
-        return false;
-      }
-
-      // Instantiate and register
-      const instance = new (SkillClass as new () => BaseSkill)();
-
-      // Validate it's a proper skill
-      if (!instance.name || !instance.getTools || !instance.execute) {
-        logger.warn({ path: absolutePath }, 'Invalid skill: missing required properties');
-        return false;
-      }
-
-      // Unregister existing skill with same name (for hot-reload)
-      if (this.registry.getSkill(instance.name)) {
-        this.registry.unregister(instance.name);
-        logger.info({ skill: instance.name }, 'Unregistered existing skill for reload');
-      }
-
-      this.registry.register(instance);
-      this.loadedFiles.add(absolutePath);
-
-      logger.info({ skill: instance.name, path: absolutePath }, 'Skill loaded successfully');
       return true;
     } catch (error) {
-      logger.error({ error, path: absolutePath }, 'Failed to load skill file');
+      logger.error({ error, path: filePath }, 'Failed to load skill file');
       return false;
     }
   }
 
-  async unloadSkill(skillName: string): Promise<boolean> {
-    const skill = this.registry.getSkill(skillName);
-    if (!skill) {
-      return false;
+  private parseFrontmatter(content: string): { frontmatter: SkillFrontmatter; body: string } {
+    const frontmatterRegex = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+    const match = content.match(frontmatterRegex);
+
+    if (!match) {
+      return { frontmatter: {}, body: content };
     }
 
-    this.registry.unregister(skillName);
-    logger.info({ skill: skillName }, 'Skill unloaded');
-    return true;
-  }
+    const frontmatterStr = match[1] ?? '';
+    const body = match[2] ?? '';
+    const frontmatter: SkillFrontmatter = {};
 
-  startWatching(intervalMs: number = 5000): void {
-    if (this.watchInterval) {
-      return;
-    }
+    // Simple YAML-like parsing
+    for (const line of frontmatterStr.split('\n')) {
+      const colonIndex = line.indexOf(':');
+      if (colonIndex > 0) {
+        const key = line.slice(0, colonIndex).trim();
+        let value = line.slice(colonIndex + 1).trim();
 
-    logger.info({ interval: intervalMs }, 'Starting skill file watcher');
-
-    this.watchInterval = setInterval(async () => {
-      await this.checkForNewSkills();
-    }, intervalMs);
-  }
-
-  stopWatching(): void {
-    if (this.watchInterval) {
-      clearInterval(this.watchInterval);
-      this.watchInterval = null;
-      logger.info('Stopped skill file watcher');
-    }
-  }
-
-  private async checkForNewSkills(): Promise<void> {
-    try {
-      const files = await readdir(this.skillsDir);
-
-      for (const file of files) {
-        if (file.endsWith('.ts') || file.endsWith('.js')) {
-          const absolutePath = join(this.skillsDir, file);
-
-          if (!this.loadedFiles.has(absolutePath)) {
-            logger.info({ file }, 'New skill file detected');
-            await this.loadSkillFile(absolutePath);
-          }
+        // Handle arrays (simple format: [item1, item2])
+        if (value.startsWith('[') && value.endsWith(']')) {
+          const items = value.slice(1, -1).split(',').map(s => s.trim().replace(/['"]/g, ''));
+          (frontmatter as Record<string, unknown>)[key] = items;
+        } else {
+          // Remove quotes if present
+          value = value.replace(/^['"]|['"]$/g, '');
+          (frontmatter as Record<string, unknown>)[key] = value;
         }
       }
-    } catch (error) {
-      // Ignore ENOENT - directory might not exist yet
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        logger.error({ error }, 'Error checking for new skills');
-      }
     }
+
+    return { frontmatter, body };
   }
 
-  getLoadedFiles(): string[] {
-    return Array.from(this.loadedFiles);
+  private extractDescription(content: string): string {
+    // Extract first paragraph or first line as description
+    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+    return lines[0]?.slice(0, 100) || 'No description';
+  }
+
+  getSkill(command: string): Skill | undefined {
+    // Normalize command
+    if (!command.startsWith('/')) {
+      command = '/' + command;
+    }
+    return this.skills.get(command);
+  }
+
+  getAllSkills(): Skill[] {
+    return Array.from(this.skills.values());
+  }
+
+  matchCommand(message: string): { skill: Skill; args: string } | null {
+    const trimmed = message.trim();
+
+    if (!trimmed.startsWith('/')) {
+      return null;
+    }
+
+    // Find matching skill
+    for (const [command, skill] of this.skills) {
+      if (trimmed === command || trimmed.startsWith(command + ' ')) {
+        const args = trimmed.slice(command.length).trim();
+        return { skill, args };
+      }
+    }
+
+    return null;
+  }
+
+  getHelpText(): string {
+    const skills = this.getAllSkills();
+
+    if (skills.length === 0) {
+      return 'No skills available.';
+    }
+
+    const lines = ['**Available Skills:**', ''];
+
+    for (const skill of skills) {
+      lines.push(`\`${skill.command}\` - ${skill.description}`);
+    }
+
+    return lines.join('\n');
   }
 }

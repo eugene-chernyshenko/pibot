@@ -18,11 +18,14 @@ export class ContextBuilder {
     this.customSystemPrompt = customSystemPrompt;
   }
 
-  buildMessages(session: Session, userMessage: string): Message[] {
+  buildMessages(session: Session, userMessage: string, skillContext?: string): Message[] {
     const messages: Message[] = [];
 
-    // Add system prompt
-    const systemPrompt = this.buildSystemPrompt();
+    // Add system prompt (with skill context if provided)
+    let systemPrompt = this.buildSystemPrompt();
+    if (skillContext) {
+      systemPrompt += '\n\n' + skillContext;
+    }
     messages.push({
       role: 'system',
       content: systemPrompt,

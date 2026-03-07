@@ -1,11 +1,11 @@
-import { BaseSkill, type ToolResult } from '../BaseSkill.js';
+import { BaseTool, type ToolResult } from '../BaseTool.js';
 import type { Tool } from '../../llm/types.js';
 import { readMarkdownFile, writeMarkdownFile, appendToMarkdownFile, formatTimestamp } from '../../utils/markdown.js';
 import { config } from '../../config/index.js';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
 
-export class MemorySkill extends BaseSkill {
+export class MemoryTool extends BaseTool {
   readonly name = 'memory';
   readonly description = 'Read and write to long-term memory';
 

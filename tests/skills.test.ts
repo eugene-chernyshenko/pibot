@@ -1,113 +1,154 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { SkillRegistry } from '../src/skills/SkillRegistry.js';
-import { DateTimeSkill } from '../src/skills/builtin/DateTime.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { SkillLoader } from '../src/skills/SkillLoader.js';
 
-describe('SkillRegistry', () => {
-  let registry: SkillRegistry;
+const TEST_DIR = '/tmp/pibot-test-skills';
 
-  beforeEach(() => {
-    registry = new SkillRegistry();
+describe('SkillLoader', () => {
+  let loader: SkillLoader;
+
+  beforeEach(async () => {
+    await mkdir(TEST_DIR, { recursive: true });
+    loader = new SkillLoader(TEST_DIR);
   });
 
-  it('should register a skill', () => {
-    const skill = new DateTimeSkill();
-    registry.register(skill);
-
-    expect(registry.getSkill('datetime')).toBe(skill);
+  afterEach(async () => {
+    await rm(TEST_DIR, { recursive: true, force: true });
   });
 
-  it('should get all tools', () => {
-    const skill = new DateTimeSkill();
-    registry.register(skill);
+  it('should load skills from markdown files', async () => {
+    await writeFile(
+      join(TEST_DIR, 'test.md'),
+      `---
+name: test
+description: A test skill
+---
 
-    const tools = registry.getAllTools();
-    expect(tools.length).toBeGreaterThan(0);
-    expect(tools.some(t => t.name === 'get_current_time')).toBe(true);
+# Test Skill
+
+This is a test skill prompt.
+`
+    );
+
+    const count = await loader.loadAll();
+    expect(count).toBe(1);
+
+    const skill = loader.getSkill('/test');
+    expect(skill).toBeDefined();
+    expect(skill?.name).toBe('test');
+    expect(skill?.description).toBe('A test skill');
+    expect(skill?.prompt).toContain('This is a test skill prompt');
   });
 
-  it('should execute a tool', async () => {
-    const skill = new DateTimeSkill();
-    registry.register(skill);
+  it('should extract description from content if not in frontmatter', async () => {
+    await writeFile(
+      join(TEST_DIR, 'nodesc.md'),
+      `This is the first line of the skill.
 
-    const result = await registry.execute('get_current_time', {});
-    expect(result.isError).toBe(false);
-    expect(result.result).toBeTruthy();
+More content here.
+`
+    );
+
+    await loader.loadAll();
+    const skill = loader.getSkill('/nodesc');
+    expect(skill?.description).toBe('This is the first line of the skill.');
   });
 
-  it('should return error for unknown tool', async () => {
-    const result = await registry.execute('unknown_tool', {});
-    expect(result.isError).toBe(true);
-    expect(result.result).toContain('Unknown tool');
-  });
-});
+  it('should parse requiredTools from frontmatter', async () => {
+    await writeFile(
+      join(TEST_DIR, 'withtools.md'),
+      `---
+name: withtools
+requiredTools: [bash, fs_read, fs_write]
+---
 
-describe('DateTimeSkill', () => {
-  let skill: DateTimeSkill;
+Skill with tools.
+`
+    );
 
-  beforeEach(() => {
-    skill = new DateTimeSkill();
-  });
-
-  it('should have required tools', () => {
-    const tools = skill.getTools();
-    const toolNames = tools.map(t => t.name);
-
-    expect(toolNames).toContain('get_current_time');
-    expect(toolNames).toContain('parse_date');
-    expect(toolNames).toContain('calculate_date_diff');
+    await loader.loadAll();
+    const skill = loader.getSkill('/withtools');
+    expect(skill?.requiredTools).toEqual(['bash', 'fs_read', 'fs_write']);
   });
 
-  it('should get current time', async () => {
-    const result = await skill.execute('get_current_time', {});
-    expect(result.isError).toBe(false);
-    expect(result.result).toBeTruthy();
+  it('should match command with arguments', async () => {
+    await writeFile(join(TEST_DIR, 'commit.md'), '# Commit skill');
+
+    await loader.loadAll();
+
+    const match = loader.matchCommand('/commit fix typo in readme');
+    expect(match).not.toBeNull();
+    expect(match?.skill.command).toBe('/commit');
+    expect(match?.args).toBe('fix typo in readme');
   });
 
-  it('should get current time in ISO format', async () => {
-    const result = await skill.execute('get_current_time', { format: 'iso' });
-    expect(result.isError).toBe(false);
-    expect(result.result).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  it('should match exact command', async () => {
+    await writeFile(join(TEST_DIR, 'help.md'), '# Help skill');
+
+    await loader.loadAll();
+
+    const match = loader.matchCommand('/help');
+    expect(match).not.toBeNull();
+    expect(match?.skill.command).toBe('/help');
+    expect(match?.args).toBe('');
   });
 
-  it('should get current time as unix timestamp', async () => {
-    const result = await skill.execute('get_current_time', { format: 'unix' });
-    expect(result.isError).toBe(false);
-    expect(parseInt(result.result)).toBeGreaterThan(0);
+  it('should return null for non-command messages', async () => {
+    await writeFile(join(TEST_DIR, 'test.md'), '# Test');
+    await loader.loadAll();
+
+    expect(loader.matchCommand('hello')).toBeNull();
+    expect(loader.matchCommand('not a /command')).toBeNull();
   });
 
-  it('should parse a date', async () => {
-    const result = await skill.execute('parse_date', {
-      dateString: '2024-01-15',
-      outputFormat: 'iso'
-    });
-    expect(result.isError).toBe(false);
-    expect(result.result).toContain('2024-01-15');
+  it('should return null for unknown commands', async () => {
+    await writeFile(join(TEST_DIR, 'test.md'), '# Test');
+    await loader.loadAll();
+
+    expect(loader.matchCommand('/unknown')).toBeNull();
   });
 
-  it('should return error for invalid date', async () => {
-    const result = await skill.execute('parse_date', {
-      dateString: 'not a date'
-    });
-    expect(result.isError).toBe(true);
+  it('should normalize command lookup', async () => {
+    await writeFile(join(TEST_DIR, 'foo.md'), '# Foo skill');
+    await loader.loadAll();
+
+    // With and without leading slash
+    expect(loader.getSkill('/foo')).toBeDefined();
+    expect(loader.getSkill('foo')).toBeDefined();
   });
 
-  it('should calculate date difference', async () => {
-    const result = await skill.execute('calculate_date_diff', {
-      startDate: '2024-01-01',
-      endDate: '2024-01-10',
-      unit: 'days'
-    });
-    expect(result.isError).toBe(false);
-    expect(result.result).toBe('9 days');
+  it('should generate help text', async () => {
+    await writeFile(
+      join(TEST_DIR, 'first.md'),
+      `---
+description: First skill
+---
+Content`
+    );
+    await writeFile(
+      join(TEST_DIR, 'second.md'),
+      `---
+description: Second skill
+---
+Content`
+    );
+
+    await loader.loadAll();
+    const help = loader.getHelpText();
+
+    expect(help).toContain('Available Skills');
+    expect(help).toContain('/first');
+    expect(help).toContain('/second');
+    expect(help).toContain('First skill');
+    expect(help).toContain('Second skill');
   });
 
-  it('should calculate date difference in hours', async () => {
-    const result = await skill.execute('calculate_date_diff', {
-      startDate: '2024-01-01T00:00:00',
-      endDate: '2024-01-01T12:00:00',
-      unit: 'hours'
-    });
-    expect(result.isError).toBe(false);
-    expect(result.result).toBe('12 hours');
+  it('should handle empty prompts directory gracefully', async () => {
+    await rm(TEST_DIR, { recursive: true, force: true });
+
+    const count = await loader.loadAll();
+    expect(count).toBe(0);
+    expect(loader.getAllSkills()).toHaveLength(0);
   });
 });

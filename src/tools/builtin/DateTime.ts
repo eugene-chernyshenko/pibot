@@ -1,7 +1,7 @@
-import { BaseSkill, type ToolResult } from '../BaseSkill.js';
+import { BaseTool, type ToolResult } from '../BaseTool.js';
 import type { Tool } from '../../llm/types.js';
 
-export class DateTimeSkill extends BaseSkill {
+export class DateTimeTool extends BaseTool {
   readonly name = 'datetime';
   readonly description = 'Date and time utilities';
 

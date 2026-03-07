@@ -7,7 +7,7 @@ export interface ToolResult {
   isError: boolean;
 }
 
-export abstract class BaseSkill {
+export abstract class BaseTool {
   abstract readonly name: string;
   abstract readonly description: string;
   protected readonly logger: Logger;

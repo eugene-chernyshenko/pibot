@@ -1,11 +1,11 @@
-import { BaseSkill, type ToolResult } from '../BaseSkill.js';
+import { BaseTool, type ToolResult } from '../BaseTool.js';
 import type { Tool } from '../../llm/types.js';
 
-const SKILL_TEMPLATE = `import { BaseSkill, type ToolResult } from '../src/skills/BaseSkill.js';
+const TOOL_TEMPLATE = `import { BaseTool, type ToolResult } from '../src/tools/BaseTool.js';
 import type { Tool } from '../src/llm/types.js';
 
-export class {{CLASS_NAME}} extends BaseSkill {
-  readonly name = '{{SKILL_NAME}}';
+export class {{CLASS_NAME}} extends BaseTool {
+  readonly name = '{{TOOL_NAME}}';
   readonly description = '{{DESCRIPTION}}';
 
   getTools(): Tool[] {
@@ -31,9 +31,9 @@ export class {{CLASS_NAME}} extends BaseSkill {
 export default {{CLASS_NAME}};
 `;
 
-const TOOL_TEMPLATE = `      {
-        name: '{{TOOL_NAME}}',
-        description: '{{TOOL_DESCRIPTION}}',
+const FUNCTION_TEMPLATE = `      {
+        name: '{{FUNCTION_NAME}}',
+        description: '{{FUNCTION_DESCRIPTION}}',
         parameters: {
           type: 'object',
           properties: {
@@ -48,7 +48,7 @@ const METHOD_TEMPLATE = `  private async {{METHOD_NAME}}(params: Record<string, 
   }
 `;
 
-export interface ToolDefinition {
+export interface FunctionDefinition {
   name: string;
   description: string;
   parameters: Array<{
@@ -60,45 +60,45 @@ export interface ToolDefinition {
   implementation?: string;
 }
 
-export interface SkillDefinition {
+export interface ToolDefinition {
   name: string;
   className: string;
   description: string;
-  tools: ToolDefinition[];
+  functions: FunctionDefinition[];
 }
 
-export class SkillGeneratorSkill extends BaseSkill {
-  readonly name = 'skill_generator';
-  readonly description = 'Generate new skills from definitions';
+export class ToolGeneratorTool extends BaseTool {
+  readonly name = 'tool_generator';
+  readonly description = 'Generate new tools from definitions';
 
   getTools(): Tool[] {
     return [
       {
-        name: 'generate_skill',
-        description: 'Generate a new skill TypeScript file from a definition. The skill will be saved to the skills/ directory.',
+        name: 'generate_tool',
+        description: 'Generate a new tool TypeScript file from a definition. The tool will be saved to the tools/ directory.',
         parameters: {
           type: 'object',
           properties: {
             name: {
               type: 'string',
-              description: 'Skill name in snake_case (e.g., "currency_converter")',
+              description: 'Tool name in snake_case (e.g., "currency_converter")',
             },
             className: {
               type: 'string',
-              description: 'Class name in PascalCase (e.g., "CurrencyConverterSkill")',
+              description: 'Class name in PascalCase (e.g., "CurrencyConverterTool")',
             },
             description: {
               type: 'string',
-              description: 'Brief description of what the skill does',
+              description: 'Brief description of what the tool does',
             },
-            tools: {
+            functions: {
               type: 'array',
-              description: 'Array of tool definitions',
+              description: 'Array of function definitions',
               items: {
                 type: 'object',
                 properties: {
-                  name: { type: 'string', description: 'Tool name in snake_case' },
-                  description: { type: 'string', description: 'Tool description' },
+                  name: { type: 'string', description: 'Function name in snake_case' },
+                  description: { type: 'string', description: 'Function description' },
                   parameters: {
                     type: 'array',
                     description: 'Array of parameter definitions',
@@ -120,20 +120,20 @@ export class SkillGeneratorSkill extends BaseSkill {
               },
             },
           },
-          required: ['name', 'className', 'description', 'tools'],
+          required: ['name', 'className', 'description', 'functions'],
         },
       },
       {
-        name: 'get_skill_template',
-        description: 'Get an example skill definition to use as reference',
+        name: 'get_tool_template',
+        description: 'Get an example tool definition to use as reference',
         parameters: {
           type: 'object',
           properties: {},
         },
       },
       {
-        name: 'validate_skill_code',
-        description: 'Validate that skill code has correct structure (basic syntax check)',
+        name: 'validate_tool_code',
+        description: 'Validate that tool code has correct structure (basic syntax check)',
         parameters: {
           type: 'object',
           properties: {
@@ -150,67 +150,67 @@ export class SkillGeneratorSkill extends BaseSkill {
 
   async execute(toolName: string, args: unknown): Promise<ToolResult> {
     switch (toolName) {
-      case 'generate_skill':
-        return this.generateSkill(args as SkillDefinition);
-      case 'get_skill_template':
+      case 'generate_tool':
+        return this.generateTool(args as ToolDefinition);
+      case 'get_tool_template':
         return this.getTemplate();
-      case 'validate_skill_code':
+      case 'validate_tool_code':
         return this.validateCode((args as { code: string }).code);
       default:
         return this.error(`Unknown tool: ${toolName}`);
     }
   }
 
-  private generateSkill(def: SkillDefinition): ToolResult {
+  private generateTool(def: ToolDefinition): ToolResult {
     try {
       // Validate definition
-      if (!def.name || !def.className || !def.description || !def.tools) {
-        return this.error('Missing required fields: name, className, description, tools');
+      if (!def.name || !def.className || !def.description || !def.functions) {
+        return this.error('Missing required fields: name, className, description, functions');
       }
 
-      if (def.tools.length === 0) {
-        return this.error('At least one tool is required');
+      if (def.functions.length === 0) {
+        return this.error('At least one function is required');
       }
 
-      // Generate tools array
-      const toolsCode = def.tools.map(tool => this.generateToolCode(tool)).join(',\n');
+      // Generate functions array
+      const functionsCode = def.functions.map(fn => this.generateFunctionCode(fn)).join(',\n');
 
       // Generate switch cases
-      const switchCases = def.tools.map(tool => {
-        const methodName = this.toMethodName(tool.name);
-        return `      case '${tool.name}':\n        return this.${methodName}(params);`;
+      const switchCases = def.functions.map(fn => {
+        const methodName = this.toMethodName(fn.name);
+        return `      case '${fn.name}':\n        return this.${methodName}(params);`;
       }).join('\n');
 
       // Generate methods
-      const methods = def.tools.map(tool => this.generateMethodCode(tool)).join('\n');
+      const methods = def.functions.map(fn => this.generateMethodCode(fn)).join('\n');
 
       // Fill template
-      let code = SKILL_TEMPLATE
+      let code = TOOL_TEMPLATE
         .replace(/\{\{CLASS_NAME\}\}/g, def.className)
-        .replace(/\{\{SKILL_NAME\}\}/g, def.name)
+        .replace(/\{\{TOOL_NAME\}\}/g, def.name)
         .replace(/\{\{DESCRIPTION\}\}/g, def.description)
-        .replace('{{TOOLS}}', toolsCode)
+        .replace('{{TOOLS}}', functionsCode)
         .replace('{{SWITCH_CASES}}', switchCases)
         .replace('{{METHODS}}', methods);
 
-      const filename = `skills/${def.className}.ts`;
+      const filename = `tools/${def.className}.ts`;
 
       return this.success(JSON.stringify({
         filename,
         code,
-        message: `Generated skill code for ${def.className}. Use fs_write to save it to ${filename}, then use load_skill to activate it.`,
+        message: `Generated tool code for ${def.className}. Use fs_write to save it to ${filename}, then use load_tool to activate it.`,
       }, null, 2));
     } catch (error) {
-      return this.error(`Failed to generate skill: ${(error as Error).message}`);
+      return this.error(`Failed to generate tool: ${(error as Error).message}`);
     }
   }
 
-  private generateToolCode(tool: ToolDefinition): string {
-    const properties = tool.parameters.map(param => {
+  private generateFunctionCode(fn: FunctionDefinition): string {
+    const properties = fn.parameters.map(param => {
       return `            ${param.name}: {\n              type: '${param.type}',\n              description: '${param.description}',\n            }`;
     }).join(',\n');
 
-    const required = tool.parameters
+    const required = fn.parameters
       .filter(p => p.required)
       .map(p => `'${p.name}'`);
 
@@ -218,26 +218,26 @@ export class SkillGeneratorSkill extends BaseSkill {
       ? `          required: [${required.join(', ')}],`
       : '';
 
-    return TOOL_TEMPLATE
-      .replace('{{TOOL_NAME}}', tool.name)
-      .replace('{{TOOL_DESCRIPTION}}', tool.description)
+    return FUNCTION_TEMPLATE
+      .replace('{{FUNCTION_NAME}}', fn.name)
+      .replace('{{FUNCTION_DESCRIPTION}}', fn.description)
       .replace('{{PROPERTIES}}', properties)
       .replace('{{REQUIRED}}', requiredLine);
   }
 
-  private generateMethodCode(tool: ToolDefinition): string {
-    const methodName = this.toMethodName(tool.name);
+  private generateMethodCode(fn: FunctionDefinition): string {
+    const methodName = this.toMethodName(fn.name);
 
     let body: string;
-    if (tool.implementation) {
-      body = tool.implementation.split('\n').map(line => '    ' + line).join('\n');
+    if (fn.implementation) {
+      body = fn.implementation.split('\n').map(line => '    ' + line).join('\n');
     } else {
       // Generate placeholder with parameter extraction
-      const paramExtractions = tool.parameters.map(p => {
+      const paramExtractions = fn.parameters.map(p => {
         return `    const ${p.name} = params['${p.name}'] as ${this.tsType(p.type)};`;
       }).join('\n');
 
-      body = paramExtractions + '\n\n    // TODO: Implement logic here\n    return this.success(`${tool.name} called with params: ${JSON.stringify(params)}`);';
+      body = paramExtractions + '\n\n    // TODO: Implement logic here\n    return this.success(`${fn.name} called with params: ${JSON.stringify(params)}`);';
     }
 
     return METHOD_TEMPLATE
@@ -245,9 +245,9 @@ export class SkillGeneratorSkill extends BaseSkill {
       .replace('{{METHOD_BODY}}', body);
   }
 
-  private toMethodName(toolName: string): string {
+  private toMethodName(functionName: string): string {
     // convert_currency -> convertCurrency
-    return toolName.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+    return functionName.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
   }
 
   private tsType(jsonType: string): string {
@@ -262,11 +262,11 @@ export class SkillGeneratorSkill extends BaseSkill {
   }
 
   private getTemplate(): ToolResult {
-    const example: SkillDefinition = {
+    const example: ToolDefinition = {
       name: 'calculator',
-      className: 'CalculatorSkill',
+      className: 'CalculatorTool',
       description: 'Basic math operations',
-      tools: [
+      functions: [
         {
           name: 'calc_add',
           description: 'Add two numbers',
@@ -299,13 +299,13 @@ return this.success(String(a * b));`,
     const errors: string[] = [];
 
     // Check for required imports
-    if (!code.includes("import { BaseSkill")) {
-      errors.push('Missing BaseSkill import');
+    if (!code.includes("import { BaseTool")) {
+      errors.push('Missing BaseTool import');
     }
 
-    // Check for class extending BaseSkill
-    if (!code.includes('extends BaseSkill')) {
-      errors.push('Class must extend BaseSkill');
+    // Check for class extending BaseTool
+    if (!code.includes('extends BaseTool')) {
+      errors.push('Class must extend BaseTool');
     }
 
     // Check for required properties
@@ -333,6 +333,6 @@ return this.success(String(a * b));`,
       return this.error(`Validation failed:\n${errors.map(e => `- ${e}`).join('\n')}`);
     }
 
-    return this.success('Validation passed! The skill code structure looks correct.');
+    return this.success('Validation passed! The tool code structure looks correct.');
   }
 }

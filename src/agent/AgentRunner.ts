@@ -35,11 +35,15 @@ export class AgentRunner {
     return this.tools.length;
   }
 
-  async processMessage(session: Session, userMessage: string): Promise<string> {
+  async processMessage(
+    session: Session,
+    userMessage: string,
+    skillContext?: string
+  ): Promise<string> {
     return this.queue.enqueue(session.id, async () => {
       let response = '';
 
-      for await (const event of this.run(session, userMessage)) {
+      for await (const event of this.run(session, userMessage, skillContext)) {
         if (event.type === 'content' && event.content) {
           response += event.content;
         } else if (event.type === 'error') {
@@ -53,22 +57,27 @@ export class AgentRunner {
 
   async *processMessageStreaming(
     session: Session,
-    userMessage: string
+    userMessage: string,
+    skillContext?: string
   ): AsyncGenerator<string> {
     // For streaming, we process directly without queue to allow incremental output
-    for await (const event of this.run(session, userMessage)) {
+    for await (const event of this.run(session, userMessage, skillContext)) {
       if (event.type === 'content' && event.content) {
         yield event.content;
       }
     }
   }
 
-  private async *run(session: Session, userMessage: string): AsyncGenerator<AgentEvent> {
+  private async *run(
+    session: Session,
+    userMessage: string,
+    skillContext?: string
+  ): AsyncGenerator<AgentEvent> {
     const maxTurns = config.agent.maxTurns;
     let turns = 0;
 
-    // Build initial messages
-    const messages = this.contextBuilder.buildMessages(session, userMessage);
+    // Build initial messages (with skill context if provided)
+    const messages = this.contextBuilder.buildMessages(session, userMessage, skillContext);
 
     // Add user message to session history
     session.messages.push({ role: 'user', content: userMessage });

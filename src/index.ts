@@ -3,14 +3,15 @@ import { Gateway } from './gateway/Gateway.js';
 import { TelegramChannel } from './channels/TelegramChannel.js';
 import { WebChatChannel } from './channels/WebChatChannel.js';
 import { AgentRunner } from './agent/AgentRunner.js';
-import { SkillRegistry } from './skills/SkillRegistry.js';
+import { ToolRegistry } from './tools/ToolRegistry.js';
+import { ToolLoader } from './tools/ToolLoader.js';
 import { SkillLoader } from './skills/SkillLoader.js';
 import { MemoryManager } from './memory/MemoryManager.js';
-import { DateTimeSkill } from './skills/builtin/DateTime.js';
-import { MemorySkill } from './skills/builtin/Memory.js';
-import { FileSystemSkill } from './skills/builtin/FileSystem.js';
-import { SkillGeneratorSkill } from './skills/builtin/SkillGenerator.js';
-import { SkillManagerSkill } from './skills/builtin/SkillManager.js';
+import { DateTimeTool } from './tools/builtin/DateTime.js';
+import { MemoryTool } from './tools/builtin/Memory.js';
+import { FileSystemTool } from './tools/builtin/FileSystem.js';
+import { ToolGeneratorTool } from './tools/builtin/ToolGenerator.js';
+import { ToolManagerTool } from './tools/builtin/ToolManager.js';
 import type { IncomingMessage } from './channels/types.js';
 import type { Session } from './gateway/SessionManager.js';
 
@@ -19,15 +20,17 @@ const logger = createLogger('main');
 class PiBot {
   private gateway: Gateway;
   private agentRunner: AgentRunner;
-  private skillRegistry: SkillRegistry;
+  private toolRegistry: ToolRegistry;
+  private toolLoader: ToolLoader;
   private skillLoader: SkillLoader;
   private memoryManager: MemoryManager;
 
   constructor() {
     this.gateway = new Gateway();
     this.agentRunner = new AgentRunner();
-    this.skillRegistry = new SkillRegistry();
-    this.skillLoader = new SkillLoader(this.skillRegistry);
+    this.toolRegistry = new ToolRegistry();
+    this.toolLoader = new ToolLoader(this.toolRegistry);
+    this.skillLoader = new SkillLoader();
     this.memoryManager = new MemoryManager();
   }
 
@@ -38,28 +41,34 @@ class PiBot {
     await this.memoryManager.initialize();
     await this.memoryManager.logSystem('PiBot starting up');
 
-    // Register built-in skills
-    this.skillRegistry.register(new DateTimeSkill());
-    this.skillRegistry.register(new MemorySkill());
-    this.skillRegistry.register(new FileSystemSkill());
-    this.skillRegistry.register(new SkillGeneratorSkill());
-    this.skillRegistry.register(new SkillManagerSkill(this.skillRegistry, this.skillLoader));
+    // Register built-in tools
+    this.toolRegistry.register(new DateTimeTool());
+    this.toolRegistry.register(new MemoryTool());
+    this.toolRegistry.register(new FileSystemTool());
+    this.toolRegistry.register(new ToolGeneratorTool());
+    this.toolRegistry.register(new ToolManagerTool(this.toolRegistry, this.toolLoader));
 
-    // Load custom skills from skills/ directory
-    const loadedCount = await this.skillLoader.loadAll();
+    // Load custom tools from tools/ directory
+    const loadedCount = await this.toolLoader.loadAll();
     if (loadedCount > 0) {
-      logger.info({ count: loadedCount }, 'Loaded custom skills');
+      logger.info({ count: loadedCount }, 'Loaded custom tools');
     }
 
-    // Start watching for new skills (hot-reload)
-    this.skillLoader.startWatching(5000);
+    // Load skills from prompts/ directory
+    const skillsLoaded = await this.skillLoader.loadAll();
+    if (skillsLoaded > 0) {
+      logger.info({ count: skillsLoaded }, 'Loaded skills');
+    }
 
-    // Configure agent with callback to refresh tools when skills change
-    this.agentRunner.setToolExecutor(this.skillRegistry);
-    this.agentRunner.setTools(this.skillRegistry.getAllTools());
+    // Start watching for new tools (hot-reload)
+    this.toolLoader.startWatching(5000);
 
-    // Listen for skill registry changes to update agent tools
-    this.setupSkillChangeListener();
+    // Configure agent with callback to refresh tools when they change
+    this.agentRunner.setToolExecutor(this.toolRegistry);
+    this.agentRunner.setTools(this.toolRegistry.getAllFunctions());
+
+    // Listen for tool registry changes to update agent
+    this.setupToolChangeListener();
 
     // Register channels
     this.gateway.registerChannel(new TelegramChannel());
@@ -80,20 +89,20 @@ class PiBot {
 
   async stop(): Promise<void> {
     logger.info('Stopping PiBot...');
-    this.skillLoader.stopWatching();
+    this.toolLoader.stopWatching();
     await this.memoryManager.logSystem('PiBot shutting down');
     await this.gateway.stop();
     logger.info('PiBot stopped');
   }
 
-  private setupSkillChangeListener(): void {
-    // Refresh agent tools periodically to pick up newly loaded skills
+  private setupToolChangeListener(): void {
+    // Refresh agent tools periodically to pick up newly loaded tools
     setInterval(() => {
       const currentTools = this.agentRunner.getToolCount?.() ?? 0;
-      const registryTools = this.skillRegistry.getAllTools().length;
+      const registryTools = this.toolRegistry.getAllFunctions().length;
 
       if (currentTools !== registryTools) {
-        this.agentRunner.setTools(this.skillRegistry.getAllTools());
+        this.agentRunner.setTools(this.toolRegistry.getAllFunctions());
         logger.info({ tools: registryTools }, 'Agent tools updated');
       }
     }, 5000);
@@ -110,8 +119,28 @@ class PiBot {
       message.content
     );
 
-    // Process with agent
-    const response = await this.agentRunner.processMessage(session, message.content);
+    // Check for skill command
+    let userMessage = message.content;
+    let skillContext: string | undefined;
+
+    const skillMatch = this.skillLoader.matchCommand(message.content);
+    if (skillMatch) {
+      const { skill, args } = skillMatch;
+      logger.info({ skill: skill.name, args }, 'Skill command detected');
+
+      // Build skill context to inject
+      skillContext = `<skill name="${skill.name}">\n${skill.prompt}\n</skill>`;
+
+      // User message becomes the args (or a default instruction)
+      userMessage = args || `Execute the ${skill.name} skill`;
+    }
+
+    // Process with agent (skill context will be injected if present)
+    const response = await this.agentRunner.processMessage(
+      session,
+      userMessage,
+      skillContext
+    );
 
     // Log assistant response
     await this.memoryManager.logMessage(
@@ -155,12 +184,14 @@ class PiBot {
 
   private printStatus(): void {
     const status = this.gateway.getStatus();
+    const skills = this.skillLoader.getAllSkills();
     logger.info('='.repeat(50));
     logger.info('PiBot Status:');
     logger.info(`  Running: ${status.isRunning}`);
     logger.info(`  Channels: ${status.channels.map((c) => c.name).join(', ')}`);
-    logger.info(`  Skills: ${this.skillRegistry.getAllSkills().map((s) => s.name).join(', ')}`);
-    logger.info(`  Tools: ${this.skillRegistry.getAllTools().map((t) => t.name).join(', ')}`);
+    logger.info(`  Tools: ${this.toolRegistry.getAllTools().map((t) => t.name).join(', ')}`);
+    logger.info(`  Functions: ${this.toolRegistry.getAllFunctions().length}`);
+    logger.info(`  Skills: ${skills.map((s) => s.command).join(', ') || 'none'}`);
     logger.info('='.repeat(50));
   }
 }
