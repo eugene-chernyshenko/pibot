@@ -7,6 +7,7 @@ import { ToolRegistry } from './tools/ToolRegistry.js';
 import { ToolLoader } from './tools/ToolLoader.js';
 import { SkillLoader } from './skills/SkillLoader.js';
 import { MemoryManager } from './memory/MemoryManager.js';
+import { MCPManager } from './mcp/index.js';
 import { DateTimeTool } from './tools/builtin/DateTime.js';
 import { MemoryTool } from './tools/builtin/Memory.js';
 import { FileSystemTool } from './tools/builtin/FileSystem.js';
@@ -24,6 +25,7 @@ class PiBot {
   private toolLoader: ToolLoader;
   private skillLoader: SkillLoader;
   private memoryManager: MemoryManager;
+  private mcpManager: MCPManager;
 
   constructor() {
     this.gateway = new Gateway();
@@ -32,6 +34,7 @@ class PiBot {
     this.toolLoader = new ToolLoader(this.toolRegistry);
     this.skillLoader = new SkillLoader();
     this.memoryManager = new MemoryManager();
+    this.mcpManager = new MCPManager();
   }
 
   async start(): Promise<void> {
@@ -47,6 +50,10 @@ class PiBot {
     this.toolRegistry.register(new FileSystemTool());
     this.toolRegistry.register(new ToolGeneratorTool());
     this.toolRegistry.register(new ToolManagerTool(this.toolRegistry, this.toolLoader));
+
+    // Initialize MCP servers (if mcp.json exists)
+    this.mcpManager.setToolRegistry(this.toolRegistry);
+    await this.mcpManager.initialize();
 
     // Load custom tools from tools/ directory
     const loadedCount = await this.toolLoader.loadAll();
@@ -90,6 +97,7 @@ class PiBot {
   async stop(): Promise<void> {
     logger.info('Stopping PiBot...');
     this.toolLoader.stopWatching();
+    await this.mcpManager.stopAll();
     await this.memoryManager.logSystem('PiBot shutting down');
     await this.gateway.stop();
     logger.info('PiBot stopped');
@@ -185,6 +193,7 @@ class PiBot {
   private printStatus(): void {
     const status = this.gateway.getStatus();
     const skills = this.skillLoader.getAllSkills();
+    const mcpServers = this.mcpManager.getServerNames();
     logger.info('='.repeat(50));
     logger.info('PiBot Status:');
     logger.info(`  Running: ${status.isRunning}`);
@@ -192,6 +201,7 @@ class PiBot {
     logger.info(`  Tools: ${this.toolRegistry.getAllTools().map((t) => t.name).join(', ')}`);
     logger.info(`  Functions: ${this.toolRegistry.getAllFunctions().length}`);
     logger.info(`  Skills: ${skills.map((s) => s.command).join(', ') || 'none'}`);
+    logger.info(`  MCP Servers: ${mcpServers.join(', ') || 'none'}`);
     logger.info('='.repeat(50));
   }
 }
