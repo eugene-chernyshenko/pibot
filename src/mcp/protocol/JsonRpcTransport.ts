@@ -31,21 +31,30 @@ export interface TransportOptions {
   serverName: string;
 }
 
+interface ResolvedTransportOptions {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  timeout: number;
+  serverName: string;
+}
+
 export class JsonRpcTransport extends EventEmitter {
   private process: ChildProcess | null = null;
   private requestId = 0;
   private pendingRequests: Map<number | string, PendingRequest> = new Map();
   private buffer = '';
   private isConnected = false;
-  private readonly options: Required<TransportOptions>;
+  private readonly options: ResolvedTransportOptions;
 
   constructor(options: TransportOptions) {
     super();
     this.options = {
-      args: [],
-      env: {},
-      timeout: 30000,
-      ...options,
+      command: options.command,
+      serverName: options.serverName,
+      args: options.args ?? [],
+      env: options.env ?? {},
+      timeout: options.timeout ?? 30000,
     };
   }
 

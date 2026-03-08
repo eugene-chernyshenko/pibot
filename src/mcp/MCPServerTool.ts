@@ -56,6 +56,12 @@ export class MCPServerTool extends BaseTool {
       return this.error(`Unknown tool: ${toolName}`);
     }
 
+    // Verify tool exists
+    const toolExists = this.connection.getTools().some((t) => t.name === mcpToolName);
+    if (!toolExists) {
+      return this.error(`Unknown tool: ${toolName}`);
+    }
+
     try {
       const result = await this.connection.callTool(
         mcpToolName,
@@ -110,8 +116,11 @@ export class MCPServerTool extends BaseTool {
   private convertProperty(prop: MCPToolProperty): ToolParameter {
     const converted: ToolParameter = {
       type: prop.type,
-      description: prop.description,
     };
+
+    if (prop.description) {
+      converted.description = prop.description;
+    }
 
     if (prop.enum) {
       converted.enum = prop.enum;
